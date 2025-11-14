@@ -49,6 +49,7 @@
         var bt = new BridgeTalk();
         bt.target = "illustrator";
         bt.body = code;
+        alert(code);
         bt.onResult = function (res) {
             try {
                 if (onResult) onResult(res.body || "");
@@ -341,147 +342,7 @@
 
     function buildIllustratorScript(payload) {
         var json = jsonStringify(payload); // embed data
-        // The AI-side script runs in Illustrator; produces a layer and draws vector items.
-        var code =
-"(function(){\n\
-    function rgbColor(r,g,b){ var c = new RGBColor(); c.red=r; c.green=g; c.blue=b; return c; }\n\
-    function ensureDoc(){ if (app.documents.length===0){ app.documents.add(DocumentColorSpace.RGB); } return app.activeDocument; }\n\
-    function getActiveArtboardRect(doc){ var idx = doc.artboards.getActiveArtboardIndex(); return doc.artboards[idx].artboardRect; }\n\
-    function mapCoord(ax, ay, rect, axis){\n\
-        var left=rect[0], top=rect[1], right=rect[2], bottom=rect[3];\n\
-        var W = right - left; var H = top - bottom;\n\
-        var tX = (ax - axis.xMin) / (axis.xMax - axis.xMin); var tY = (ay - axis.yMin) / (axis.yMax - axis.yMin);\n\
-        var x = left + tX * W;\n\
-        var y = top - tY * H; // invert Y for math -> Illustrator\n\
-        return [x, y];\n\
-    }\n\
-    function drawLine(doc, layer, p1, p2, stroke, width){\n\
-        var path = layer.pathItems.add();\n\
-        path.stroked = true; path.filled = false; path.strokeWidth = width;\n\
-        path.strokeColor = stroke;\n\
-        path.setEntirePath([p1, p2]);\n\
-        return path;\n\
-    }\n\
-    function drawPolyline(doc, layer, pts, stroke, width){\n\
-        if (pts.length<2) return null;\n\
-        var path = layer.pathItems.add();\n\
-        path.stroked=true; path.filled=false; path.strokeWidth=width; path.strokeColor=stroke;\n\
-        path.setEntirePath(pts);\n\
-        return path;\n\
-    }\n\
-    function drawPoint(layer, p, color, size){\n\
-        // Draw small circle to represent a point\n\
-        var radius = size; // points\n\
-        var left = p[0]-radius, top = p[1]+radius;\n\
-        var ellipse = layer.pathItems.ellipse(top, left, radius*2, radius*2);\n\
-        ellipse.stroked = true; ellipse.strokeWidth = 0.75; ellipse.strokeColor = color; ellipse.filled = true; ellipse.fillColor = color;\n\
-        return ellipse;\n\
-    }\n\
-    function safeEval(expr, x){\n\
-        // Very basic evaluator: replaces 'x' with numeric literal and evals.\n\
-        // Supports Math-like functions (sin,cos,tan,exp,log,abs,pow,min,max).\n\
-        // WARNING: Do not run untrusted expressions.\n\
-        var env = 'var sin=Math.sin,cos=Math.cos,tan=Math.tan,asin=Math.asin,acos=Math.acos,atan=Math.atan,exp=Math.exp,log=Math.log,abs=Math.abs,pow=Math.pow,min=Math.min,max=Math.max,sqrt=Math.sqrt,PI=Math.PI,E=Math.E;';\n\
-        var s = '('+expr+')';\n\
-        s = s.replace(/\\bx\\b/g, '('+x+')');\n\
-        return eval(env + s);\n\
-    }\n\
-    function drawGraph(payload){\n\
-        var doc = ensureDoc();\n\
-        var layerName = payload.meta && payload.meta.layerName ? payload.meta.layerName : 'MAGITech-Graph';\n\
-        var layer = (function(){\n\
-            for (var i=0;i<doc.layers.length;i++){ if (doc.layers[i].name===layerName) return doc.layers[i]; }\n\
-            var ly = doc.layers.add(); ly.name = layerName; return ly;\n\
-        })();\n\
-        var rect = getActiveArtboardRect(doc);\n\
-        var axis = payload.axis, styles = payload.styles;\n\
-        var axisColor = rgbColor(styles.axisColor.r, styles.axisColor.g, styles.axisColor.b);\n\
-        var gridColor = rgbColor(styles.gridColor.r, styles.gridColor.g, styles.gridColor.b);\n\
-        var curveColor = rgbColor(styles.curveColor.r, styles.curveColor.g, styles.curveColor.b);\n\
-        var ptColor = rgbColor(styles.pointColor.r, styles.pointColor.g, styles.pointColor.b);\n\
-        // Grid\n\
-        if (axis.showGrid){\n\
-            var ticks = Math.max(0, payload.axis.tickCount|0);\n\
-            if (ticks>0){\n\
-                for (var i=0;i<=ticks;i++){\n\
-                    var tx = axis.xMin + (axis.xMax-axis.xMin)*i/ticks;\n\
-                    var p1 = mapCoord(tx, axis.yMin, rect, axis);\n\
-                    var p2 = mapCoord(tx, axis.yMax, rect, axis);\n\
-                    drawLine(doc, layer, p1, p2, gridColor, styles.gridWidth);\n\
-                    var ty = axis.yMin + (axis.yMax-axis.yMin)*i/ticks;\n\
-                    var p3 = mapCoord(axis.xMin, ty, rect, axis);\n\
-                    var p4 = mapCoord(axis.xMax, ty, rect, axis);\n\
-                    drawLine(doc, layer, p3, p4, gridColor, styles.gridWidth);\n\
-                }\n\
-            }\n\
-        }\n\
-        // Axes lines (x=0 and y=0 if in range)\n\
-        if (axis.xMin<0 && axis.xMax>0){\n\
-            var p1 = mapCoord(0, axis.yMin, rect, axis);\n\
-            var p2 = mapCoord(0, axis.yMax, rect, axis);\n\
-            drawLine(doc, layer, p1, p2, axisColor, styles.axisWidth);\n\
-        }\n\
-        if (axis.yMin<0 && axis.yMax>0){\n\
-            var p3 = mapCoord(axis.xMin, 0, rect, axis);\n\
-            var p4 = mapCoord(axis.xMax, 0, rect, axis);\n\
-            drawLine(doc, layer, p3, p4, axisColor, styles.axisWidth);\n\
-        }\n\
-        // Ticks along axes\n\
-        if (payload.axis.showTicks){\n\
-            var ticks = Math.max(0, payload.axis.tickCount|0);\n\
-            if (ticks>0){\n\
-                var tickSize = 5; // points long\n\
-                if (axis.xMin<0 && axis.xMax>0){\n\
-                    for (var i=0;i<=ticks;i++){\n\
-                        var ty = axis.yMin + (axis.yMax-axis.yMin)*i/ticks;\n\
-                        var c = mapCoord(0, ty, rect, axis);\n\
-                        drawLine(doc, layer, [c[0]-tickSize, c[1]], [c[0]+tickSize, c[1]], axisColor, styles.axisWidth);\n\
-                    }\n\
-                }\n\
-                if (axis.yMin<0 && axis.yMax>0){\n\
-                    for (var j=0;j<=ticks;j++){\n\
-                        var tx = axis.xMin + (axis.xMax-axis.xMin)*j/ticks;\n\
-                        var c2 = mapCoord(tx, 0, rect, axis);\n\
-                        drawLine(doc, layer, [c2[0], c2[1]-tickSize], [c2[0], c2[1]+tickSize], axisColor, styles.axisWidth);\n\
-                    }\n\
-                }\n\
-            }\n\
-        }\n\
-        // Draw points\n\
-        if (payload.points && payload.points.length){\n\
-            for (var k=0;k<payload.points.length;k++){\n\
-                var pt = payload.points[k];\n\
-                var mp = mapCoord(pt.x, pt.y, rect, axis);\n\
-                drawPoint(layer, mp, ptColor, styles.pointSize);\n\
-            }\n\
-        }\n\
-        // Draw function curve\n\
-        if (payload.equation && payload.equation.functionExpr){\n\
-            var expr = String(payload.equation.functionExpr);\n\
-            var n = Math.max(2, payload.equation.samples|0);\n\
-            var xs = payload.equation.xStart, xe = payload.equation.xEnd;\n\
-            var pts = [];\n\
-            for (var i=0;i<n;i++){\n\
-                var t = i/(n-1);\n\
-                var x = xs + (xe-xs)*t;\n\
-                var y;\n\
-                try { y = safeEval(expr, x); } catch(e) { y = NaN; }\n\
-                if (isNaN(y) || !isFinite(y)) { continue; }\n\
-                pts.push(mapCoord(x,y,rect,axis));\n\
-            }\n\
-            drawPolyline(app.activeDocument, layer, pts, curveColor, styles.curveWidth);\n\
-        }\n\
-        return 'OK';\n\
-    }\n\
-    var payload = " + json + ";\n\
-    drawGraph(payload);\n\
-})();";
-        return code;
-    }
-
-    drawBtn.onClick = function () {
-        var payload = gatherPayload();
-         var SCRIPT_FOLDER = (new File($.fileName)).parent;
+        var SCRIPT_FOLDER = (new File($.fileName)).parent;
         var functionsFile = new File(SCRIPT_FOLDER + "/plotFunctions/DrawingFunctions.jsx");
 
         if (!functionsFile.exists) {
@@ -491,10 +352,152 @@
         functionsFile.open("r");
         var functionsString = functionsFile.read();
         functionsFile.close();
+        // The AI-side script runs in Illustrator; produces a layer and draws vector items.
+        var code = functionsString + "\n";
+        code += "var payload = " + json + ";\n";
+        code += "drawGraph(payload);\n"
+  
+        /*
+        var code =
+"(function(){
+    function rgbColor(r,g,b){ var c = new RGBColor(); c.red=r; c.green=g; c.blue=b; return c; }
+    function ensureDoc(){ if (app.documents.length===0){ app.documents.add(DocumentColorSpace.RGB); } return app.activeDocument; }
+    function getActiveArtboardRect(doc){ var idx = doc.artboards.getActiveArtboardIndex(); return doc.artboards[idx].artboardRect; }
+    function mapCoord(ax, ay, rect, axis){
+        var left=rect[0], top=rect[1], right=rect[2], bottom=rect[3];
+        var W = right - left; var H = top - bottom;
+        var tX = (ax - axis.xMin) / (axis.xMax - axis.xMin); var tY = (ay - axis.yMin) / (axis.yMax - axis.yMin);
+        var x = left + tX * W;
+        var y = top - tY * H; // invert Y for math -> Illustrator
+        return [x, y];
+    }
+    function drawLine(doc, layer, p1, p2, stroke, width){
+        var path = layer.pathItems.add();
+        path.stroked = true; path.filled = false; path.strokeWidth = width;
+        path.strokeColor = stroke;
+        path.setEntirePath([p1, p2]);
+        return path;
+    }
+    function drawPolyline(doc, layer, pts, stroke, width){
+        if (pts.length<2) return null;
+        var path = layer.pathItems.add();
+        path.stroked=true; path.filled=false; path.strokeWidth=width; path.strokeColor=stroke;
+        path.setEntirePath(pts);
+        return path;
+    }
+    function drawPoint(layer, p, color, size){
+        // Draw small circle to represent a point
+        var radius = size; // points
+        var left = p[0]-radius, top = p[1]+radius;
+        var ellipse = layer.pathItems.ellipse(top, left, radius*2, radius*2);
+        ellipse.stroked = true; ellipse.strokeWidth = 0.75; ellipse.strokeColor = color; ellipse.filled = true; ellipse.fillColor = color;
+        return ellipse;
+    }
+    function safeEval(expr, x){
+        // Very basic evaluator: replaces 'x' with numeric literal and evals.
+        // Supports Math-like functions (sin,cos,tan,exp,log,abs,pow,min,max).
+        // WARNING: Do not run untrusted expressions.
+        var env = 'var sin=Math.sin,cos=Math.cos,tan=Math.tan,asin=Math.asin,acos=Math.acos,atan=Math.atan,exp=Math.exp,log=Math.log,abs=Math.abs,pow=Math.pow,min=Math.min,max=Math.max,sqrt=Math.sqrt,PI=Math.PI,E=Math.E;';
+        var s = '('+expr+')';
+        s = s.replace(/\\bx\\b/g, '('+x+')');
+        return eval(env + s);
+    }
+    function drawGraph(payload){
+        var doc = ensureDoc();
+        var layerName = payload.meta && payload.meta.layerName ? payload.meta.layerName : 'MAGITech-Graph';
+        var layer = (function(){
+            for (var i=0;i<doc.layers.length;i++){ if (doc.layers[i].name===layerName) return doc.layers[i]; }
+            var ly = doc.layers.add(); ly.name = layerName; return ly;
+        })();
+        var rect = getActiveArtboardRect(doc);
+        var axis = payload.axis, styles = payload.styles;
+        var axisColor = rgbColor(styles.axisColor.r, styles.axisColor.g, styles.axisColor.b);
+        var gridColor = rgbColor(styles.gridColor.r, styles.gridColor.g, styles.gridColor.b);
+        var curveColor = rgbColor(styles.curveColor.r, styles.curveColor.g, styles.curveColor.b);
+        var ptColor = rgbColor(styles.pointColor.r, styles.pointColor.g, styles.pointColor.b);
+        // Grid
+        if (axis.showGrid){
+            var ticks = Math.max(0, payload.axis.tickCount|0);
+            if (ticks>0){
+                for (var i=0;i<=ticks;i++){
+                    var tx = axis.xMin + (axis.xMax-axis.xMin)*i/ticks;
+                    var p1 = mapCoord(tx, axis.yMin, rect, axis);
+                    var p2 = mapCoord(tx, axis.yMax, rect, axis);
+                    drawLine(doc, layer, p1, p2, gridColor, styles.gridWidth);
+                    var ty = axis.yMin + (axis.yMax-axis.yMin)*i/ticks;
+                    var p3 = mapCoord(axis.xMin, ty, rect, axis);
+                    var p4 = mapCoord(axis.xMax, ty, rect, axis);
+                    drawLine(doc, layer, p3, p4, gridColor, styles.gridWidth);
+                }
+            }
+        }
+        // Axes lines (x=0 and y=0 if in range)
+        if (axis.xMin<0 && axis.xMax>0){
+            var p1 = mapCoord(0, axis.yMin, rect, axis);
+            var p2 = mapCoord(0, axis.yMax, rect, axis);
+            drawLine(doc, layer, p1, p2, axisColor, styles.axisWidth);
+        }
+        if (axis.yMin<0 && axis.yMax>0){
+            var p3 = mapCoord(axis.xMin, 0, rect, axis);
+            var p4 = mapCoord(axis.xMax, 0, rect, axis);
+            drawLine(doc, layer, p3, p4, axisColor, styles.axisWidth);
+        }
+        // Ticks along axes
+        if (payload.axis.showTicks){
+            var ticks = Math.max(0, payload.axis.tickCount|0);
+            if (ticks>0){
+                var tickSize = 5; // points long
+                if (axis.xMin<0 && axis.xMax>0){
+                    for (var i=0;i<=ticks;i++){
+                        var ty = axis.yMin + (axis.yMax-axis.yMin)*i/ticks;
+                        var c = mapCoord(0, ty, rect, axis);
+                        drawLine(doc, layer, [c[0]-tickSize, c[1]], [c[0]+tickSize, c[1]], axisColor, styles.axisWidth);
+                    }
+                }
+                if (axis.yMin<0 && axis.yMax>0){
+                    for (var j=0;j<=ticks;j++){
+                        var tx = axis.xMin + (axis.xMax-axis.xMin)*j/ticks;
+                        var c2 = mapCoord(tx, 0, rect, axis);
+                        drawLine(doc, layer, [c2[0], c2[1]-tickSize], [c2[0], c2[1]+tickSize], axisColor, styles.axisWidth);
+                    }
+                }
+            }
+        }
+        // Draw points
+        if (payload.points && payload.points.length){
+            for (var k=0;k<payload.points.length;k++){
+                var pt = payload.points[k];
+                var mp = mapCoord(pt.x, pt.y, rect, axis);
+                drawPoint(layer, mp, ptColor, styles.pointSize);
+            }
+        }
+        // Draw function curve
+        if (payload.equation && payload.equation.functionExpr){
+            var expr = String(payload.equation.functionExpr);
+            var n = Math.max(2, payload.equation.samples|0);
+            var xs = payload.equation.xStart, xe = payload.equation.xEnd;
+            var pts = [];
+            for (var i=0;i<n;i++){
+                var t = i/(n-1);
+                var x = xs + (xe-xs)*t;
+                var y;
+                try { y = safeEval(expr, x); } catch(e) { y = NaN; }
+                if (isNaN(y) || !isFinite(y)) { continue; }
+                pts.push(mapCoord(x,y,rect,axis));
+            }
+            drawPolyline(app.activeDocument, layer, pts, curveColor, styles.curveWidth);
+        }
+        return 'OK';
+    }
+    var payload = " + json + ";
+    drawGraph(payload);
+})();";
+*/
+        return code;
+    }
 
-        
-
-//alert("fffffffffffffff!----" + functionsString);
+    drawBtn.onClick = function () {
+        var payload = gatherPayload();
 
 alert("Data---" + payload.axis.axisWidth + "," + payload.axis.axisHeight + "," + payload.axis.xMin + "\n," + payload.axis.xMax);
         // Basic validation
@@ -511,17 +514,18 @@ alert("Data---" + payload.axis.axisWidth + "," + payload.axis.axisHeight + "," +
         }, function (err) {
             statusTxt.text = "Error: " + err;
         });
+        statusTxt.text = code;
     };
 
     clearBtn.onClick = function () {
         var layerName = "MAGITech-Graph";
         var code =
-"(function(){\n\
+        "(function(){\n\
     function ensureDoc(){ if (app.documents.length===0){ return null; } return app.activeDocument; }\n\
     var doc = ensureDoc(); if (!doc) { return 'No document'; }\n\
     for (var i=doc.layers.length-1;i>=0;i--){ if (doc.layers[i].name==='MAGITech-Graph'){ doc.layers[i].remove(); return 'Cleared'; } }\n\
     return 'Layer not found';\n\
-})();";
+        })();";
         statusTxt.text = "Clearing…";
         sendToIllustrator(code, function (res) { statusTxt.text = res; }, function (err) { statusTxt.text = "Error: " + err; });
     };
